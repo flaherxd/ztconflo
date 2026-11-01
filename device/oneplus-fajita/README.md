@@ -19,6 +19,8 @@ This directory contains device-specific configurations, patched device tree, dri
 
 ## Installation & Flashing
 
+> For a complete step-by-step walkthrough covering host setup, cloning, and first boot, see the **[Full Installation Guide (INSTALL.md)](INSTALL.md)**.
+
 ### Stage 1: Build Image
 From the root of the repository:
 ```sh

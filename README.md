@@ -15,7 +15,7 @@ A complete, fully verified port of ztOS to real hardware on the OnePlus 6T (*faj
   - **Connectivity**: Wi-Fi (`ath10k_snoc` / `wcn3990`), Bluetooth (`hci0`), USB Ethernet gadget.
   - **Power & Action Center**: TI `bq27411` fuel gauge, PM8998 dual-LED torch/flashlight.
 - **Device Tree & Configs**: [`device/oneplus-fajita/`](device/oneplus-fajita/)
-- **Installation & Flashing Guide**: See [`device/oneplus-fajita/README.md`](device/oneplus-fajita/README.md)
+- **Installation Guide**: Detailed step-by-step instructions in [`device/oneplus-fajita/INSTALL.md`](device/oneplus-fajita/INSTALL.md)
 - **Automated Rootfs & Fastboot Builder**: [`build_fajita.py`](build_fajita.py) builds `boot.img` and `rootfs.img` completely unprivileged.
 
 ```sh

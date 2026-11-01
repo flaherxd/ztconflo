@@ -4,18 +4,40 @@
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
-ROOT = Path("/home/artur/ztconflo")
+ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "out" / "oneplus-fajita"
-WORK = Path("/home/artur/.cache/ztconflo/work/oneplus-fajita")
-APKS = Path("/home/artur/.cache/ztconflo/apks")
-GSI = Path("/home/artur/ztOS/build/ztos/gsi/ztos-gsi-0.2.0-aarch64.tar.zst")
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "ztconflo"
+WORK = CACHE_DIR / "work" / "oneplus-fajita"
+APKS = CACHE_DIR / "apks"
 DEVICE = ROOT / "device" / "oneplus-fajita"
+
+# Locate ztOS GSI tarball
+GSI_ENV = os.environ.get("ZTOS_GSI")
+if GSI_ENV and Path(GSI_ENV).is_file():
+    GSI = Path(GSI_ENV)
+else:
+    candidates = [
+        Path.home() / "ztOS" / "build" / "ztos" / "gsi" / "ztos-gsi-0.2.0-aarch64.tar.zst",
+        ROOT.parent / "ztOS" / "build" / "ztos" / "gsi" / "ztos-gsi-0.2.0-aarch64.tar.zst",
+        CACHE_DIR / "gsi" / "0.2.0" / "ztos-gsi-0.2.0-aarch64.tar.zst",
+        ROOT / "ztos-gsi-0.2.0-aarch64.tar.zst",
+    ]
+    GSI = next((c for c in candidates if c.is_file()), candidates[0])
 
 def say(*args):
     print("==>", *args, flush=True)
+
+def ensure_file(path: Path, url: str):
+    if path.exists() and path.stat().st_size > 0:
+        return
+    say(f"Downloading {path.name}...")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    import urllib.request
+    urllib.request.urlretrieve(url, path)
 
 def run_unshare(cmd, cwd=None):
     unshare_cmd = ["unshare", "--map-auto", "--map-root-user", "--mount", "--fork", "--pid", *cmd]
@@ -30,6 +52,11 @@ def unpack_apk(apk: Path, dest: Path):
         tar.extractall(dest, members=members, filter="tar")
 
 def main():
+    if not GSI or not GSI.exists():
+        print(f"Error: ztOS GSI tarball not found at: {GSI}")
+        print("Please build it in ztOS or specify ZTOS_GSI=/path/to/ztos-gsi-0.2.0-aarch64.tar.zst")
+        sys.exit(1)
+
     OUT.mkdir(parents=True, exist_ok=True)
     rootfs = WORK / "root"
     if rootfs.exists():
@@ -47,8 +74,14 @@ def main():
     tmp_firmware = WORK / "pkg_firmware"
     shutil.rmtree(tmp_kernel, ignore_errors=True)
     shutil.rmtree(tmp_firmware, ignore_errors=True)
-    unpack_apk(APKS / "linux-postmarketos-qcom-sdm845-7.1_rc1-r4.apk", tmp_kernel)
-    unpack_apk(APKS / "firmware-oneplus-sdm845-19-r0.apk", tmp_firmware)
+    
+    kernel_apk = APKS / "linux-postmarketos-qcom-sdm845-7.1_rc1-r4.apk"
+    firmware_apk = APKS / "firmware-oneplus-sdm845-19-r0.apk"
+    ensure_file(kernel_apk, "http://mirror.postmarketos.org/postmarketos/master/aarch64/linux-postmarketos-qcom-sdm845-7.1_rc1-r4.apk")
+    ensure_file(firmware_apk, "http://mirror.postmarketos.org/postmarketos/master/aarch64/firmware-oneplus-sdm845-19-r0.apk")
+    
+    unpack_apk(kernel_apk, tmp_kernel)
+    unpack_apk(firmware_apk, tmp_firmware)
 
     # Copy modules into root/usr/lib/modules
     mod_src = tmp_kernel / "lib" / "modules"
