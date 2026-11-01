@@ -4,6 +4,28 @@ A phone's codename in, a flashable ztOS image out: Arch Linux ARM with ztMETRO, 
 
 The full design is in `docs/spec.md`.
 
+## Featured Device Ports
+
+### OnePlus 6T (`oneplus-fajita`) — Snapdragon 845
+A complete, fully verified port of ztOS to real hardware on the OnePlus 6T (*fajita*):
+- **Hardware Status**: Tested and working on live device.
+  - **Display & 3D**: Native 60 FPS ztMETRO UI, Vulkan 1.3 via Mesa Turnip (`vulkan-freedreno`), GLES 3.1 via Freedreno.
+  - **Audio**: PipeWire & WirePlumber with full ALSA UCM2 profiles and TFA9894 smart speaker amplifier (`MMITest_48000` profile, mastered system sounds).
+  - **Touch & Sensors**: Synaptics multi-touch (`s6sy761`), accelerometer/gyroscope IIO sensors, SPMI haptics.
+  - **Connectivity**: Wi-Fi (`ath10k_snoc` / `wcn3990`), Bluetooth (`hci0`), USB Ethernet gadget.
+  - **Power & Action Center**: TI `bq27411` fuel gauge, PM8998 dual-LED torch/flashlight.
+- **Device Tree & Configs**: [`device/oneplus-fajita/`](device/oneplus-fajita/)
+- **Installation & Flashing Guide**: See [`device/oneplus-fajita/README.md`](device/oneplus-fajita/README.md)
+- **Automated Rootfs & Fastboot Builder**: [`build_fajita.py`](build_fajita.py) builds `boot.img` and `rootfs.img` completely unprivileged.
+
+```sh
+# One-command build and flash
+python3 build_fajita.py
+fastboot flash boot out/oneplus-fajita/boot.img
+fastboot flash userdata out/oneplus-fajita/rootfs.img
+fastboot reboot
+```
+
 ## The terminal UI
 
 ```sh
