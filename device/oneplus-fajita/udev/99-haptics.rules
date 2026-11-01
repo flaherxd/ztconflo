@@ -1,0 +1,1 @@
+KERNEL=="event*", SUBSYSTEM=="input", ATTRS{name}=="spmi_haptics", MODE="0666", TAG+="uaccess"

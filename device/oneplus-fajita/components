@@ -1,0 +1,5 @@
+# ztOSCoreSensorFramework: OnePlus 6T (fajita) hardware components
+# kind|id|argument|title, in the order they are started.
+unit|ModemManager.service||Modem
+unit|zrnperfd.service||Performance
+session|ztapps||App list

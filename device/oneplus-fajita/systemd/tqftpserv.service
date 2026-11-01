@@ -1,0 +1,9 @@
+[Unit]
+Description=QRTR TFTP service
+
+[Service]
+ExecStart=/usr/bin/tqftpserv
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

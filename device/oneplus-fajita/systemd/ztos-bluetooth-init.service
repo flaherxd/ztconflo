@@ -1,0 +1,13 @@
+[Unit]
+Description=Initialize Qualcomm WCN3990 Bluetooth Address
+Before=bluetooth.service
+Wants=bluetooth.service
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ztos-bluetooth-init
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target

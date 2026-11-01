@@ -1,0 +1,46 @@
+#!/bin/sh
+# ztos-bluetooth-init: provision public MAC address for Qualcomm WCN3990 on boot
+
+MAC_FILE="/etc/bluetooth/bd_addr"
+
+if [ -f "$MAC_FILE" ] && [ -s "$MAC_FILE" ]; then
+    BD_ADDR=$(cat "$MAC_FILE" | tr -d ' \r\n')
+else
+    # Derive from wlan0 MAC (+1) or generate stable locally-administered address from machine-id
+    WLAN_MAC=$(cat /sys/class/net/wlan0/address 2>/dev/null)
+    if [ -n "$WLAN_MAC" ]; then
+        prefix=$(echo "$WLAN_MAC" | cut -d: -f1-5)
+        last_hex=$(echo "$WLAN_MAC" | cut -d: -f6)
+        last_dec=$((16#$last_hex))
+        next_dec=$(((last_dec + 1) % 256))
+        next_hex=$(printf "%02x" $next_dec)
+        BD_ADDR="$prefix:$next_hex"
+    elif [ -f /etc/machine-id ]; then
+        m=$(cat /etc/machine-id)
+        BD_ADDR="02:${m:0:2}:${m:2:2}:${m:4:2}:${m:6:2}:${m:8:2}"
+    else
+        BD_ADDR="02:00:58:6c:42:01"
+    fi
+    mkdir -p /etc/bluetooth
+    echo "$BD_ADDR" > "$MAC_FILE"
+fi
+
+# Wait up to 15 seconds for hci0 to appear
+for i in $(seq 1 30); do
+    if [ -d /sys/class/bluetooth/hci0 ]; then
+        break
+    fi
+    sleep 0.5
+done
+
+if ! [ -d /sys/class/bluetooth/hci0 ]; then
+    exit 0
+fi
+
+# If unconfigured, set public-addr
+if btmgmt config 2>&1 | grep -q "missing options: public-address"; then
+    btmgmt --index 0 public-addr "$BD_ADDR"
+fi
+
+# Power on
+btmgmt --index 0 power on >/dev/null 2>&1 || true

@@ -1,0 +1,12 @@
+[Unit]
+Description=Start SDM845 Modem Remote Processor
+After=rmtfs.service pd-mapper.service tqftpserv.service
+Before=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo start > /sys/class/remoteproc/remoteproc3/state || true'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
