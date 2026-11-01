@@ -1,9 +1,5 @@
 # OnePlus 6T (*fajita*) ztOS Installation Guide
 
-A quick guide to build and flash **ztOS** onto the OnePlus 6T.
-
----
-
 ## Stage 1: Host Preparation
 
 1. **Install required packages**  
@@ -15,87 +11,83 @@ A quick guide to build and flash **ztOS** onto the OnePlus 6T.
    ```sh
    sudo apt update && sudo apt install -y android-tools-adb android-tools-fastboot python3 util-linux e2fsprogs libarchive-tools mkbootimg git
    ```
+   *What you see:* Package installation progress.  
    *Wait:* ~1 minute.
 
----
+## Stage 2: Get Repositories
 
-## Stage 2: Get the Repositories
-
-1. **Clone the port repositories**  
+1. **Clone the repositories**  
    ```sh
    git clone https://github.com/flaherxd/ztconflo.git -b port/oneplus-fajita
+   ```
+   ```sh
    git clone https://github.com/flaherxd/ztOS.git -b port/oneplus-fajita
    ```
-   *What you see:* Git cloning progress.  
-   *Wait:* ~1–2 minutes.
+   *What you see:* Git checkout progress.  
+   *Wait:* ~1 minute.
 
-2. **Enter the builder folder**  
+2. **Open the builder directory**  
    ```sh
    cd ztconflo
    ```
 
----
+## Stage 3: Build Images
 
-## Stage 3: Build Flashable Images
-
-1. **Run the build script**  
+1. **Run the builder script**  
    ```sh
    python3 build_fajita.py
    ```
-   *What you see:* Steps 1 through 8 completing, ending with `SUCCESS! Images ready in out/oneplus-fajita`.  
+   *What you see:* Build steps 1–8 completing and `SUCCESS! Images ready in out/oneplus-fajita`.  
    *Wait:* ~2–3 minutes.
-
----
 
 ## Stage 4: Enter Fastboot Mode
 
-1. **Put the phone into Fastboot**  
-   Turn off the OnePlus 6T, then hold **Volume Down + Power** until the fastboot menu appears.
-   *(Or run `adb reboot bootloader`)*
+1. **Boot phone to fastboot**  
+   Power off the phone, then hold **Volume Down + Power** until the fastboot screen appears.  
+   *(Or run: `adb reboot bootloader`)*
 
-2. **Verify connection**  
+2. **Check USB connection**  
    ```sh
    fastboot devices
    ```
-   *What you see:* Your phone's serial number followed by `fastboot`.  
-   *Wait:* ~5 seconds.
-
----
+   *What you see:* Device serial followed by `fastboot`.  
+   *Wait:* 5 seconds.
 
 ## Stage 5: Flash Device
 
-1. **Flash boot and userdata partitions**  
+1. **Flash boot and rootfs partitions**  
    ```sh
    cd out/oneplus-fajita
+   ```
+   ```sh
    fastboot flash boot boot.img
+   ```
+   ```sh
    fastboot flash userdata rootfs.img
+   ```
+   ```sh
    fastboot reboot
    ```
-   *What you see:* `Sending... OKAY` and `Writing... OKAY` for both images.  
+   *What you see:* `OKAY` confirmations for each partition.  
    *Wait:* ~1 minute.
 
----
+## Stage 6: First Boot
 
-## Stage 6: First Boot & Login
-
-1. **Boot into ztOS**  
-   The screen will light up with the OnePlus logo, then display the **ztMETRO** live tile dashboard.  
+1. **Wait for ztMETRO to load**  
+   The phone boots to the ztMETRO live tile screen.  
    *Wait:* ~15–20 seconds.
 
-2. **Connect over USB Ethernet**  
-   Connect the phone to your computer via USB cable, then SSH in:
+2. **Log in over USB Ethernet**  
    ```sh
    ssh alarm@172.16.42.1
    ```
-   *Login credentials:* user `alarm`, password `alarm` (root password is `root`).
-
----
+   Type password `alarm` when prompted.
 
 ## Problem Resolution
 
 | Problem | Cause | Solution |
 |---|---|---|
-| `fastboot devices` is empty | Faulty USB cable or missing permissions | Use a USB data cable, a rear USB port, or run `sudo fastboot devices`. |
-| Speaker volume is quiet | Safe gain limit without upstream DSP curve | **Normal.** Volume is intentionally capped to protect hardware. Do not boost gain. |
-| SSH connection times out | Host network manager didn't configure USB interface | On host, assign an IP manually: `sudo ip addr add 172.16.42.2/24 dev <usb-interface>`. |
-| Boots back to stock or recovery | Fastboot flashed the inactive slot | Run `fastboot getvar current-slot`, then flash to that slot: `fastboot flash boot_a boot.img` (or `_b`). |
+| `fastboot devices` is empty | Bad cable or missing permissions | Use a USB data cable or run `sudo fastboot devices`. |
+| Speaker volume is quiet | Safe gain limit without upstream DSP curve | Normal behavior. Volume is capped to protect hardware. |
+| SSH connection times out | Host network manager didn't configure USB link | Run `sudo ip addr add 172.16.42.2/24 dev <usb-interface>`. |
+| Boots back to stock or recovery | Fastboot flashed inactive slot | Run `fastboot getvar current-slot`, then flash: `fastboot flash boot_a boot.img` (or `_b`). |
