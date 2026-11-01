@@ -2,92 +2,103 @@
 
 ## Stage 1: Host Preparation
 
-1. **Install required packages**  
-   On Arch Linux / Manjaro:
-   ```sh
-   sudo pacman -S --needed android-tools python util-linux e2fsprogs libarchive mkbootimg git
-   ```
-   On Ubuntu / Debian:
-   ```sh
-   sudo apt update && sudo apt install -y android-tools-adb android-tools-fastboot python3 util-linux e2fsprogs libarchive-tools mkbootimg git
-   ```
-   *What you see:* Package installation progress.  
-   *Wait:* ~1 minute.
+1. Install build and flash utilities on Arch Linux or Manjaro:
 
-## Stage 2: Get Repositories
+    ```sh
+    sudo pacman -S --needed android-tools python util-linux e2fsprogs libarchive mkbootimg git
+    ```
 
-1. **Clone the repositories**  
-   ```sh
-   git clone https://github.com/flaherxd/ztconflo.git -b port/oneplus-fajita
-   ```
-   ```sh
-   git clone https://github.com/flaherxd/ztOS.git -b port/oneplus-fajita
-   ```
-   *What you see:* Git checkout progress.  
-   *Wait:* ~1 minute.
+2. Install build and flash utilities on Ubuntu or Debian:
 
-2. **Open the builder directory**  
-   ```sh
-   cd ztconflo
-   ```
+    ```sh
+    sudo apt update && sudo apt install -y android-tools-adb android-tools-fastboot python3 util-linux e2fsprogs libarchive-tools mkbootimg git
+    ```
 
-## Stage 3: Build Images
+## Stage 2: Getting the Repositories
 
-1. **Run the builder script**  
-   ```sh
-   python3 build_fajita.py
-   ```
-   *What you see:* Build steps 1–8 completing and `SUCCESS! Images ready in out/oneplus-fajita`.  
-   *Wait:* ~2–3 minutes.
+1. Clone the ztConflo builder repository:
 
-## Stage 4: Enter Fastboot Mode
+    ```sh
+    git clone https://github.com/flaherxd/ztconflo.git -b port/oneplus-fajita
+    ```
 
-1. **Boot phone to fastboot**  
-   Power off the phone, then hold **Volume Down + Power** until the fastboot screen appears.  
-   *(Or run: `adb reboot bootloader`)*
+2. Clone the ztOS mobile shell repository:
 
-2. **Check USB connection**  
-   ```sh
-   fastboot devices
-   ```
-   *What you see:* Device serial followed by `fastboot`.  
-   *Wait:* 5 seconds.
+    ```sh
+    git clone https://github.com/flaherxd/ztOS.git -b port/oneplus-fajita
+    ```
 
-## Stage 5: Flash Device
+3. Enter the builder directory:
 
-1. **Flash boot and rootfs partitions**  
-   ```sh
-   cd out/oneplus-fajita
-   ```
-   ```sh
-   fastboot flash boot boot.img
-   ```
-   ```sh
-   fastboot flash userdata rootfs.img
-   ```
-   ```sh
-   fastboot reboot
-   ```
-   *What you see:* `OKAY` confirmations for each partition.  
-   *Wait:* ~1 minute.
+    ```sh
+    cd ztconflo
+    ```
 
-## Stage 6: First Boot
+## Stage 3: Building the Images
 
-1. **Wait for ztMETRO to load**  
-   The phone boots to the ztMETRO live tile screen.  
-   *Wait:* ~15–20 seconds.
+1. Run the builder script:
 
-2. **Log in over USB Ethernet**  
-   ```sh
-   ssh alarm@172.16.42.1
-   ```
-   Type password `alarm` when prompted.
+    ```sh
+    python3 build_fajita.py
+    ```
 
-## Problem Resolution
+## Stage 4: Entering Fastboot Mode
+
+1. Reboot the phone into bootloader over ADB:
+
+    ```sh
+    adb reboot bootloader
+    ```
+
+2. Verify that fastboot detects the device:
+
+    ```sh
+    fastboot devices
+    ```
+
+## Stage 5: Flashing the Device
+
+1. Navigate to the output directory:
+
+    ```sh
+    cd out/oneplus-fajita
+    ```
+
+2. Flash the boot partition:
+
+    ```sh
+    fastboot flash boot boot.img
+    ```
+
+3. Flash the root filesystem partition:
+
+    ```sh
+    fastboot flash userdata rootfs.img
+    ```
+
+4. Reboot the phone into ztOS:
+
+    ```sh
+    fastboot reboot
+    ```
+
+## Stage 6: First Boot and Access
+
+1. Connect the phone to your computer with a USB cable.
+
+2. Connect to the device via SSH:
+
+    ```sh
+    ssh alarm@172.16.42.1
+    ```
+
+    Password: `alarm` (root password: `root`).
+
+## Problems
 
 | Problem | Cause | Solution |
-|---|---|---|
-| `fastboot devices` is empty | Bad cable or missing permissions | Use a USB data cable or run `sudo fastboot devices`. |
-| Speaker volume is quiet | Safe gain limit without upstream DSP curve | Normal behavior. Volume is capped to protect hardware. |
-| SSH connection times out | Host network manager didn't configure USB link | Run `sudo ip addr add 172.16.42.2/24 dev <usb-interface>`. |
-| Boots back to stock or recovery | Fastboot flashed inactive slot | Run `fastboot getvar current-slot`, then flash: `fastboot flash boot_a boot.img` (or `_b`). |
+| --- | --- | --- |
+| Fastboot device not detected | Faulty USB cable or missing permissions | Use a USB data cable, plug into a rear motherboard port, or run `sudo fastboot devices`. |
+| Speaker volume is quiet | Safe gain limit without upstream DSP curve | Expected behavior. Volume is capped to protect hardware. |
+| SSH connection times out | USB network interface not configured by host | Assign an IP to the host interface: `sudo ip addr add 172.16.42.2/24 dev <interface>`. |
+| Device boots into stock OS or recovery | Fastboot flashed the inactive slot | Run `fastboot getvar current-slot`, then flash directly to that slot: `fastboot flash boot_a boot.img` (or `_b`). |
