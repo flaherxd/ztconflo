@@ -8,7 +8,7 @@ This directory contains device-specific configurations, patched device tree, dri
 
 * **Display**: Native resolution on AMOLED panel at 60 FPS via Freedreno KMS.
 * **3D Acceleration**: Vulkan 1.3 via Mesa Turnip (`vulkan-freedreno`) and OpenGL ES 3.1 via Freedreno.
-* **Audio**: PipeWire & WirePlumber with full ALSA UCM2 profiles and TFA9894 smart speaker amplifier (`MMITest_48000` profile, mastered system sounds).
+* **Audio**: PipeWire & WirePlumber with full ALSA UCM2 profiles and TFA9894 smart speaker amplifier (`MMITest_48000` profile, mastered system sounds; volume is currently conservative/quiet to prevent distortion and protect the speaker without vendor DSP protection).
 * **Touchscreen**: Synaptics multi-touch driver (`s6sy761`).
 * **Connectivity**: Wi-Fi (`ath10k_snoc` / `wcn3990`), Bluetooth (`hci0`), and LTE cellular data via `ModemManager`.
 * **Power & Battery**: TI `bq27411` fuel gauge and `pmi8998` charger monitoring.
@@ -48,3 +48,9 @@ After ~15 seconds, the phone boots into the `ztmetro` live tile dashboard. Conne
 ssh alarm@172.16.42.1
 # Default credentials: user 'alarm', password 'alarm'
 ```
+
+---
+
+## Known Notes & Quirks
+
+* **Audio Output Level**: Speaker audio is clear and distortion-free, but remains quiet. Software volumes in PipeWire and ztMETRO are strictly capped to 0 dBFS and the TFA9894 amplifier profile uses safe gain to avoid hardware damage until dynamic speaker protection algorithms are implemented.

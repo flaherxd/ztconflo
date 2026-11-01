@@ -10,7 +10,7 @@ The full design is in `docs/spec.md`.
 A complete, fully verified port of ztOS to real hardware on the OnePlus 6T (*fajita*):
 - **Hardware Status**: Tested and working on live device.
   - **Display & 3D**: Native 60 FPS ztMETRO UI, Vulkan 1.3 via Mesa Turnip (`vulkan-freedreno`), GLES 3.1 via Freedreno.
-  - **Audio**: PipeWire & WirePlumber with full ALSA UCM2 profiles and TFA9894 smart speaker amplifier (`MMITest_48000` profile, mastered system sounds).
+  - **Audio**: PipeWire & WirePlumber with ALSA UCM2 and TFA9894 smart amp (clean sound; volume currently conservative/quiet to protect hardware without vendor DSP).
   - **Touch & Sensors**: Synaptics multi-touch (`s6sy761`), accelerometer/gyroscope IIO sensors, SPMI haptics.
   - **Connectivity**: Wi-Fi (`ath10k_snoc` / `wcn3990`), Bluetooth (`hci0`), USB Ethernet gadget.
   - **Power & Action Center**: TI `bq27411` fuel gauge, PM8998 dual-LED torch/flashlight.
