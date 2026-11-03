@@ -3,11 +3,16 @@
 """ztos-modem-bridge: bridge ModemManager and NetworkManager to ztOS status/ctl interfaces."""
 import json
 import os
+import re
 import select
 import subprocess
 import threading
 import time
 from pathlib import Path
+
+from dbus.mainloop.glib import DBusGMainLoop
+import dbus
+from gi.repository import GLib
 
 RUN_DIR = Path("/run/ztoscorenetworking")
 STATUS_FILE = RUN_DIR / "status"
@@ -16,8 +21,15 @@ ZRN_DIR = Path("/run/zrn-modem")
 ZRN_STATUS = ZRN_DIR / "status"
 ZRN_CTL = Path("/run/zrn-modem.ctl")
 
+VAR_DIR = Path("/var/lib/ztoscorenetworking")
+SMS_DIR = VAR_DIR / "sms"
+SMS_LOG = SMS_DIR / "log"
+CALL_LOG = VAR_DIR / "calls"
+
 RUN_DIR.mkdir(parents=True, exist_ok=True)
 ZRN_DIR.mkdir(parents=True, exist_ok=True)
+SMS_DIR.mkdir(parents=True, exist_ok=True)
+VAR_DIR.mkdir(parents=True, exist_ok=True)
 
 if not ZRN_STATUS.exists() and not ZRN_STATUS.is_symlink():
     try:
@@ -25,34 +37,119 @@ if not ZRN_STATUS.exists() and not ZRN_STATUS.is_symlink():
     except Exception:
         pass
 
+for p in (CTL_FIFO, ZRN_CTL):
+    if p.is_symlink() and not p.exists():
+        try:
+            p.unlink()
+        except Exception:
+            pass
+
 if not CTL_FIFO.exists():
+    if CTL_FIFO.is_symlink():
+        CTL_FIFO.unlink()
     try:
         os.mkfifo(CTL_FIFO, 0o666)
     except Exception:
         pass
 
-if not ZRN_CTL.exists() and not ZRN_CTL.is_symlink():
+try:
+    os.chmod(CTL_FIFO, 0o666)
+except Exception:
+    pass
+
+if not ZRN_CTL.exists():
+    if ZRN_CTL.is_symlink():
+        ZRN_CTL.unlink()
     try:
         ZRN_CTL.symlink_to(CTL_FIFO)
     except Exception:
         pass
 
-def notify_ztmetro():
+# Global call state
+call_lock = threading.Lock()
+current_call_path = None
+current_call_state = "idle"  # idle, dialing, ringing, incoming, active
+current_call_number = ""
+current_call_result = ""
+call_since = 0
+call_answered_at = 0
+call_is_incoming = False
+active_audio_profile = "HiFi"
+
+# Modem info cache
+cached_modem_info = None
+
+def tell_shell(line: str):
+    """Notify ztmetro UI shell."""
     for ctl in (Path("/run/user/1000/ztmetro.ctl"), Path("/run/ztmetro.ctl")):
         if ctl.exists():
             try:
                 with open(ctl, "w") as f:
-                    f.write("modem\n")
+                    f.write(line)
             except Exception:
                 pass
 
+def set_audio_profile(profile: str):
+    """Switch PipeWire ALSA card profile and configure QDSP6 mixer routing."""
+    global active_audio_profile
+    if active_audio_profile == profile:
+        return
+    active_audio_profile = profile
+    env = dict(os.environ)
+    env["PULSE_SERVER"] = "unix:/run/user/1000/pulse/native"
+    try:
+        subprocess.run(["pactl", "set-card-profile", "alsa_card.platform-sound", profile],
+                       env=env, timeout=3, check=False)
+    except Exception:
+        pass
+
+    if profile == "Voice Call":
+        # Ensure QDSP6 hardware voice routing is enabled
+        try:
+            subprocess.run(["amixer", "-c", "0", "cset", "name=SLIMBUS_0_RX Voice Mixer VoiceMMode1", "1"],
+                           timeout=2, check=False)
+            subprocess.run(["amixer", "-c", "0", "cset", "name=VoiceMMode1 Capture Mixer SLIMBUS_0_TX", "1"],
+                           timeout=2, check=False)
+        except Exception:
+            pass
+    elif profile == "HiFi":
+        # Disconnect QDSP6 voice mixers to avoid audio bleeding
+        try:
+            subprocess.run(["amixer", "-c", "0", "cset", "name=SLIMBUS_0_RX Voice Mixer VoiceMMode1", "0"],
+                           timeout=2, check=False)
+            subprocess.run(["amixer", "-c", "0", "cset", "name=VoiceMMode1 Capture Mixer SLIMBUS_0_TX", "0"],
+                           timeout=2, check=False)
+            subprocess.run(["amixer", "-c", "0", "cset", "name=QUAT_MI2S_RX Voice Mixer VoiceMMode1", "0"],
+                           timeout=2, check=False)
+        except Exception:
+            pass
+
+def log_call(call_type: str, at: int, number: str, duration: int):
+    """Append completed/missed call to ztOS call history."""
+    try:
+        line = f"{call_type}\t{at}\t{number}\t{duration}\n"
+        with open(CALL_LOG, "a") as f:
+            f.write(line)
+    except Exception:
+        pass
+
+def log_sms(direction: str, at: int, number: str, text: str):
+    """Append SMS to ztOS message history."""
+    try:
+        escaped = text.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", " ")
+        line = f"{direction}\t{at}\t{number}\t{escaped}\n"
+        with open(SMS_LOG, "a") as f:
+            f.write(line)
+    except Exception:
+        pass
+
 def ensure_uim_session():
+    """Ensure Dual-SIM QMI baseband primary GW session is provisioned on SDM845."""
     try:
         res = subprocess.run(["qmicli", "-p", "-d", "qrtr://0", "--uim-get-card-status"],
                              capture_output=True, text=True, timeout=5)
         out = res.stdout
         if "Primary GW:   session doesn't exist" in out:
-            import re
             slots = re.findall(r"Slot \[(\d+)\]:.*?Card state: 'present'.*?Application ID:\s+([0-9A-Fa-f:\s]+?)(?=\n\s+[A-Za-z]|\Z)", out, re.DOTALL)
             for slot, aid in slots:
                 aid_clean = "".join(aid.split())
@@ -66,6 +163,7 @@ def ensure_uim_session():
         pass
 
 def get_modem_info():
+    global cached_modem_info
     try:
         res = subprocess.run(["mmcli", "-m", "0", "-J"], capture_output=True, text=True, timeout=5)
         if res.returncode == 0:
@@ -74,14 +172,18 @@ def get_modem_info():
             state = modem.get("generic", {}).get("state", "")
             if state in ("failed", "unknown"):
                 ensure_uim_session()
+            cached_modem_info = modem
             return modem
         else:
             ensure_uim_session()
     except Exception:
         pass
-    return None
+    return cached_modem_info
 
-def write_status(info):
+def write_status(info=None):
+    if info is None:
+        info = cached_modem_info
+
     sim = "absent"
     operator = ""
     tech = ""
@@ -122,7 +224,7 @@ def write_status(info):
                 registered = "roaming"
             elif "searching" in reg_raw:
                 registered = "searching"
-            
+
             techs = generic.get("access-technologies", [])
             if techs:
                 tech = techs[0].upper()
@@ -135,7 +237,15 @@ def write_status(info):
             except Exception:
                 bars = 0
 
+    with call_lock:
+        c_state = current_call_state
+        c_num = current_call_number
+        c_res = current_call_result
+
     lines = [
+        f"call_result={c_res}",
+        f"call={c_state}",
+        f"call_number={c_num}",
         f"sim={sim}",
         f"operator={operator}",
         f"registered={registered}",
@@ -146,7 +256,7 @@ def write_status(info):
         f"airplane={airplane}"
     ]
     content = "\n".join(lines) + "\n"
-    
+
     tmp = RUN_DIR / "status.tmp"
     try:
         tmp.write_text(content)
@@ -154,7 +264,333 @@ def write_status(info):
         os.chmod(STATUS_FILE, 0o644)
     except Exception:
         pass
-    notify_ztmetro()
+    tell_shell("modem\n")
+
+# --- D-Bus Event Handling ---
+
+bus = None
+modem_voice = None
+modem_messaging = None
+
+def get_call_props(call_path):
+    global bus
+    try:
+        obj = bus.get_object("org.freedesktop.ModemManager1", call_path)
+        props = dbus.Interface(obj, "org.freedesktop.DBus.Properties")
+        all_props = props.GetAll("org.freedesktop.ModemManager1.Call")
+        return all_props
+    except Exception:
+        return {}
+
+def on_call_added(path):
+    global current_call_path, current_call_state, current_call_number, call_since, call_answered_at, call_is_incoming, current_call_result
+    props = get_call_props(path)
+    state = int(props.get("State", 0))
+    direction = int(props.get("Direction", 0))  # 1 = incoming, 2 = outgoing
+    number = str(props.get("Number", ""))
+
+    with call_lock:
+        current_call_path = str(path)
+        current_call_number = number
+        call_since = int(time.time())
+        call_answered_at = 0
+        current_call_result = ""
+
+        if direction == 1:
+            call_is_incoming = True
+            current_call_state = "incoming"
+            tell_shell("screen on\n")
+            tell_shell("call_screen\n")
+        else:
+            call_is_incoming = False
+            current_call_state = "dialing" if state in (0, 1) else "ringing" if state == 2 else "active" if state == 4 else "dialing"
+            set_audio_profile("Voice Call")
+            tell_shell("screen on\n")
+            tell_shell("call_screen\n")
+
+    write_status()
+
+def on_call_deleted(path):
+    global current_call_path, current_call_state, current_call_number, current_call_result, call_since, call_answered_at, call_is_incoming
+    path_str = str(path)
+    with call_lock:
+        if current_call_path == path_str or current_call_state != "idle":
+            duration = int(time.time() - call_answered_at) if call_answered_at > 0 else 0
+            call_type = "out" if not call_is_incoming else ("in" if call_answered_at > 0 else "missed")
+            num = current_call_number
+
+            if num:
+                log_call(call_type, call_since, num, duration)
+                if call_type == "missed":
+                    tell_shell(f"notify Phone|Missed call|{num}\n")
+
+            current_call_state = "idle"
+            current_call_number = ""
+            current_call_result = "ended"
+            current_call_path = None
+            set_audio_profile("HiFi")
+            tell_shell("call_screen end\n")
+
+    write_status()
+
+def on_call_state_changed(old_state, new_state, reason, path=None):
+    global current_call_path, current_call_state, current_call_number, current_call_result, call_answered_at, call_is_incoming, call_since
+    old_state = int(old_state)
+    new_state = int(new_state)
+    reason = int(reason)
+    path_str = str(path) if path else current_call_path
+
+    # MM_CALL_STATE: 0=unknown, 1=dialing, 2=ringing-out, 3=ringing-in, 4=active, 5=held, 6=waiting, 7=terminated
+    with call_lock:
+        if new_state == 1:  # dialing
+            current_call_state = "dialing"
+            set_audio_profile("Voice Call")
+        elif new_state == 2:  # ringing-out
+            current_call_state = "ringing"
+            set_audio_profile("Voice Call")
+        elif new_state == 3:  # ringing-in
+            current_call_state = "incoming"
+            tell_shell("screen on\n")
+            tell_shell("call_screen\n")
+        elif new_state == 4:  # active
+            current_call_state = "active"
+            if not call_answered_at:
+                call_answered_at = int(time.time())
+            set_audio_profile("Voice Call")
+        elif new_state == 7:  # terminated
+            duration = int(time.time() - call_answered_at) if call_answered_at > 0 else 0
+            call_type = "out" if not call_is_incoming else ("in" if call_answered_at > 0 else "missed")
+            num = current_call_number
+
+            if num:
+                log_call(call_type, call_since, num, duration)
+                if call_type == "missed":
+                    tell_shell(f"notify Phone|Missed call|{num}\n")
+
+            current_call_result = "busy" if reason in (3, 7) else "ended"
+            current_call_state = "idle"
+            current_call_number = ""
+            current_call_path = None
+            set_audio_profile("HiFi")
+            tell_shell("call_screen end\n")
+
+            # Clean up terminated call object from ModemManager
+            if path_str and modem_voice:
+                try:
+                    modem_voice.DeleteCall(path_str)
+                except Exception:
+                    pass
+
+    write_status()
+
+def on_sms_added(path, received):
+    """Handle incoming SMS notification."""
+    if not received:
+        return
+    try:
+        obj = bus.get_object("org.freedesktop.ModemManager1", path)
+        props = dbus.Interface(obj, "org.freedesktop.DBus.Properties")
+        all_props = props.GetAll("org.freedesktop.ModemManager1.Sms")
+        number = str(all_props.get("Number", ""))
+        text = str(all_props.get("Text", ""))
+        ts_str = str(all_props.get("Timestamp", ""))
+        ts = int(time.time())
+
+        log_sms("in", ts, number, text)
+
+        first_line = text.split("\n")[0].strip()
+        first_line_clean = first_line.replace("|", "/")[:64]
+        tell_shell(f"notify Messaging|{number}|{first_line_clean}\n")
+        tell_shell("modem\n")
+    except Exception:
+        pass
+
+def sync_existing_sim_sms():
+    """Populate initial SMS log if empty from messages already on SIM."""
+    if SMS_LOG.exists() and SMS_LOG.stat().st_size > 0:
+        return
+    try:
+        if not modem_messaging:
+            return
+        msgs = modem_messaging.List()
+        for m in msgs:
+            obj = bus.get_object("org.freedesktop.ModemManager1", m)
+            props = dbus.Interface(obj, "org.freedesktop.DBus.Properties")
+            all_props = props.GetAll("org.freedesktop.ModemManager1.Sms")
+            state = int(all_props.get("State", 0))
+            number = str(all_props.get("Number", ""))
+            text = str(all_props.get("Text", ""))
+            if number or text:
+                direction = "out" if state in (4, 5, 6) else "in"
+                log_sms(direction, int(time.time()), number, text)
+    except Exception:
+        pass
+
+def init_dbus():
+    global bus, modem_voice, modem_messaging
+    try:
+        DBusGMainLoop(set_as_default=True)
+        bus = dbus.SystemBus()
+        modem_obj = bus.get_object("org.freedesktop.ModemManager1", "/org/freedesktop/ModemManager1/Modem/0")
+        modem_voice = dbus.Interface(modem_obj, "org.freedesktop.ModemManager1.Modem.Voice")
+        modem_messaging = dbus.Interface(modem_obj, "org.freedesktop.ModemManager1.Modem.Messaging")
+
+        bus.add_signal_receiver(on_call_added, signal_name="CallAdded",
+                                dbus_interface="org.freedesktop.ModemManager1.Modem.Voice")
+        bus.add_signal_receiver(on_call_deleted, signal_name="CallDeleted",
+                                dbus_interface="org.freedesktop.ModemManager1.Modem.Voice")
+        bus.add_signal_receiver(on_call_state_changed, signal_name="StateChanged",
+                                dbus_interface="org.freedesktop.ModemManager1.Call",
+                                path_keyword="path")
+        bus.add_signal_receiver(on_sms_added, signal_name="Added",
+                                dbus_interface="org.freedesktop.ModemManager1.Modem.Messaging")
+
+        sync_existing_sim_sms()
+        return True
+    except Exception as e:
+        return False
+
+# --- Control FIFO Listener ---
+
+def handle_ctl_command(line: str):
+    global current_call_path, current_call_state, current_call_number, current_call_result, call_since, call_answered_at, call_is_incoming
+    parts = line.strip().split(maxsplit=1)
+    if not parts:
+        return
+    cmd = parts[0].lower()
+    arg = parts[1] if len(parts) > 1 else ""
+
+    if cmd == "call" and arg:
+        target_number = arg.strip()
+        with call_lock:
+            current_call_number = target_number
+            current_call_state = "dialing"
+            current_call_result = ""
+            call_since = int(time.time())
+            call_answered_at = 0
+            call_is_incoming = False
+            set_audio_profile("Voice Call")
+            tell_shell("screen on\n")
+            tell_shell("call_screen\n")
+
+        write_status()
+        try:
+            if modem_voice:
+                call_path = modem_voice.CreateCall({"number": dbus.String(target_number)})
+                current_call_path = str(call_path)
+                call_obj = bus.get_object("org.freedesktop.ModemManager1", call_path)
+                call_iface = dbus.Interface(call_obj, "org.freedesktop.ModemManager1.Call")
+                call_iface.Start()
+            else:
+                subprocess.run(["mmcli", "-m", "0", f"--voice-create-call=number={target_number}"], timeout=5)
+        except Exception:
+            pass
+
+    elif cmd == "answer":
+        with call_lock:
+            current_call_state = "active"
+            call_answered_at = int(time.time())
+            set_audio_profile("Voice Call")
+
+        write_status()
+        try:
+            if current_call_path and bus:
+                call_obj = bus.get_object("org.freedesktop.ModemManager1", current_call_path)
+                call_iface = dbus.Interface(call_obj, "org.freedesktop.ModemManager1.Call")
+                call_iface.Accept()
+            elif modem_voice:
+                calls = modem_voice.ListCalls()
+                for c in calls:
+                    call_obj = bus.get_object("org.freedesktop.ModemManager1", c)
+                    call_iface = dbus.Interface(call_obj, "org.freedesktop.ModemManager1.Call")
+                    call_iface.Accept()
+                    break
+        except Exception:
+            pass
+
+    elif cmd == "hangup":
+        with call_lock:
+            duration = int(time.time() - call_answered_at) if call_answered_at > 0 else 0
+            call_type = "out" if not call_is_incoming else ("in" if call_answered_at > 0 else "missed")
+            num = current_call_number
+
+            if num:
+                log_call(call_type, call_since, num, duration)
+
+            current_call_state = "idle"
+            current_call_number = ""
+            current_call_result = "ended"
+            set_audio_profile("HiFi")
+            tell_shell("call_screen end\n")
+
+        write_status()
+        try:
+            if current_call_path and bus:
+                call_obj = bus.get_object("org.freedesktop.ModemManager1", current_call_path)
+                call_iface = dbus.Interface(call_obj, "org.freedesktop.ModemManager1.Call")
+                call_iface.Hangup()
+            elif modem_voice:
+                modem_voice.HangupAll()
+        except Exception:
+            pass
+
+    elif cmd == "speaker":
+        if arg.lower() == "on":
+            try:
+                subprocess.run(["amixer", "-c", "0", "cset", "name=QUAT_MI2S_RX Voice Mixer VoiceMMode1", "1"], timeout=2, check=False)
+                subprocess.run(["amixer", "-c", "0", "cset", "name=SLIMBUS_0_RX Voice Mixer VoiceMMode1", "0"], timeout=2, check=False)
+            except Exception:
+                pass
+        else:
+            try:
+                subprocess.run(["amixer", "-c", "0", "cset", "name=SLIMBUS_0_RX Voice Mixer VoiceMMode1", "1"], timeout=2, check=False)
+                subprocess.run(["amixer", "-c", "0", "cset", "name=QUAT_MI2S_RX Voice Mixer VoiceMMode1", "0"], timeout=2, check=False)
+            except Exception:
+                pass
+
+    elif cmd == "mute":
+        mute_val = "0" if arg.lower() == "on" else "1"
+        try:
+            subprocess.run(["amixer", "-c", "0", "cset", "name=VoiceMMode1 Capture Mixer SLIMBUS_0_TX", mute_val], timeout=2, check=False)
+        except Exception:
+            pass
+
+    elif cmd == "dtmf" and arg:
+        digit = arg.strip()[:1]
+        try:
+            if current_call_path and bus:
+                call_obj = bus.get_object("org.freedesktop.ModemManager1", current_call_path)
+                call_iface = dbus.Interface(call_obj, "org.freedesktop.ModemManager1.Call")
+                call_iface.SendDtmf(digit)
+        except Exception:
+            pass
+
+    elif cmd == "sms" and arg:
+        sms_parts = arg.split(maxsplit=1)
+        if len(sms_parts) == 2:
+            num, body = sms_parts
+            try:
+                if modem_messaging:
+                    sms_path = modem_messaging.Create({"number": dbus.String(num), "text": dbus.String(body)})
+                    sms_obj = bus.get_object("org.freedesktop.ModemManager1", sms_path)
+                    sms_iface = dbus.Interface(sms_obj, "org.freedesktop.ModemManager1.Sms")
+                    sms_iface.Send()
+                log_sms("out", int(time.time()), num, body)
+            except Exception:
+                pass
+
+    elif cmd == "data":
+        if arg.lower() == "on":
+            subprocess.run(["nmcli", "radio", "wwan", "on"], check=False)
+            subprocess.run(["nmcli", "dev", "connect", "qrtr0"], check=False)
+        elif arg.lower() == "off":
+            subprocess.run(["nmcli", "dev", "disconnect", "qrtr0"], check=False)
+
+    elif cmd == "airplane":
+        if arg.lower() == "on":
+            subprocess.run(["nmcli", "radio", "all", "off"], check=False)
+        elif arg.lower() == "off":
+            subprocess.run(["nmcli", "radio", "all", "on"], check=False)
 
 def ctl_listener():
     while True:
@@ -169,22 +605,23 @@ def ctl_listener():
                         line = fifo.readline()
                         if not line:
                             break
-                        cmd = line.strip().lower()
-                        if cmd == "data on":
-                            subprocess.run(["nmcli", "radio", "wwan", "on"], check=False)
-                            subprocess.run(["nmcli", "dev", "connect", "qrtr0"], check=False)
-                        elif cmd == "data off":
-                            subprocess.run(["nmcli", "dev", "disconnect", "qrtr0"], check=False)
-                        elif cmd == "airplane on":
-                            subprocess.run(["nmcli", "radio", "all", "off"], check=False)
-                        elif cmd == "airplane off":
-                            subprocess.run(["nmcli", "radio", "all", "on"], check=False)
+                        handle_ctl_command(line)
         except Exception:
             time.sleep(1)
 
+def glib_loop_thread():
+    loop = GLib.MainLoop()
+    loop.run()
+
 def main():
-    t = threading.Thread(target=ctl_listener, daemon=True)
-    t.start()
+    init_dbus()
+
+    t_ctl = threading.Thread(target=ctl_listener, daemon=True)
+    t_ctl.start()
+
+    t_glib = threading.Thread(target=glib_loop_thread, daemon=True)
+    t_glib.start()
+
     while True:
         info = get_modem_info()
         write_status(info)

@@ -155,6 +155,11 @@ def main():
         dest_udev.mkdir(parents=True, exist_ok=True)
         run_unshare(["cp", "-a", f"{DEVICE / 'udev'}/.", str(dest_udev)])
 
+    if (DEVICE / "polkit").exists():
+        dest_polkit = rootfs / "etc" / "polkit-1" / "rules.d"
+        dest_polkit.mkdir(parents=True, exist_ok=True)
+        run_unshare(["cp", "-a", f"{DEVICE / 'polkit'}/.", str(dest_polkit)])
+
     run_unshare(["cp", "-a", f"{DEVICE / 'systemd'}/.", str(dest_systemd)])
 
     say("3. Writing vendor device layer (ztOSIAL manifest)...")

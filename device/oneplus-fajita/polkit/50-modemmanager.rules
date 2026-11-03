@@ -1,0 +1,6 @@
+/* Allow members of wheel (such as user alarm) to manage ModemManager without auth prompt */
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.ModemManager1.") === 0 && subject.isInGroup("wheel")) {
+        return polkit.Result.YES;
+    }
+});
