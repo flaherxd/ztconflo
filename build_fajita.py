@@ -241,7 +241,7 @@ chroot "$R" /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/bin HOME=/r
 echo ztos-oneplus-fajita > /etc/hostname
 sed -i "s/#DisableSandbox/DisableSandbox/g" /etc/pacman.conf
 pacman-key --init >/dev/null 2>&1 && pacman-key --populate archlinuxarm >/dev/null 2>&1 || true
-pacman -S --noconfirm --needed modemmanager vulkan-freedreno >/dev/null 2>&1 || true
+pacman -S --noconfirm --needed modemmanager libqmi libmbim bluez bluez-utils vulkan-freedreno >/dev/null 2>&1 || true
 rm -rf /var/cache/pacman/pkg/*
 id alarm >/dev/null 2>&1 || useradd -m -u 1000 -G wheel,video,input,audio -s /bin/bash alarm
 usermod -aG wheel,video,input,audio alarm >/dev/null 2>&1 || true
