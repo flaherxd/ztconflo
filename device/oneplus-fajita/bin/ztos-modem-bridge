@@ -46,12 +46,37 @@ def notify_ztmetro():
             except Exception:
                 pass
 
+def ensure_uim_session():
+    try:
+        res = subprocess.run(["qmicli", "-p", "-d", "qrtr://0", "--uim-get-card-status"],
+                             capture_output=True, text=True, timeout=5)
+        out = res.stdout
+        if "Primary GW:   session doesn't exist" in out:
+            import re
+            slots = re.findall(r"Slot \[(\d+)\]:.*?Card state: 'present'.*?Application ID:\s+([0-9A-Fa-f:\s]+?)(?=\n\s+[A-Za-z]|\Z)", out, re.DOTALL)
+            for slot, aid in slots:
+                aid_clean = "".join(aid.split())
+                subprocess.run(["qmicli", "-p", "-d", "qrtr://0",
+                                f"--uim-change-provisioning-session=session-type=primary-gw-provisioning,activate=yes,slot={slot},aid={aid_clean}"],
+                               timeout=5)
+                time.sleep(1)
+                subprocess.run(["systemctl", "restart", "ModemManager"], timeout=5)
+                break
+    except Exception:
+        pass
+
 def get_modem_info():
     try:
         res = subprocess.run(["mmcli", "-m", "0", "-J"], capture_output=True, text=True, timeout=5)
         if res.returncode == 0:
             data = json.loads(res.stdout)
-            return data.get("modem", {})
+            modem = data.get("modem", {})
+            state = modem.get("generic", {}).get("state", "")
+            if state in ("failed", "unknown"):
+                ensure_uim_session()
+            return modem
+        else:
+            ensure_uim_session()
     except Exception:
         pass
     return None
