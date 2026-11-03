@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""ztos-modem-bridge: bridge ModemManager and NetworkManager to ztOS status/ctl interfaces."""
+import json
+import os
+import select
+import subprocess
+import threading
+import time
+from pathlib import Path
+
+RUN_DIR = Path("/run/ztoscorenetworking")
+STATUS_FILE = RUN_DIR / "status"
+CTL_FIFO = Path("/run/ztoscorenetworking.ctl")
+ZRN_DIR = Path("/run/zrn-modem")
+ZRN_STATUS = ZRN_DIR / "status"
+ZRN_CTL = Path("/run/zrn-modem.ctl")
+
+RUN_DIR.mkdir(parents=True, exist_ok=True)
+ZRN_DIR.mkdir(parents=True, exist_ok=True)
+
+if not ZRN_STATUS.exists() and not ZRN_STATUS.is_symlink():
+    try:
+        ZRN_STATUS.symlink_to(STATUS_FILE)
+    except Exception:
+        pass
+
+if not CTL_FIFO.exists():
+    try:
+        os.mkfifo(CTL_FIFO, 0o666)
+    except Exception:
+        pass
+
+if not ZRN_CTL.exists() and not ZRN_CTL.is_symlink():
+    try:
+        ZRN_CTL.symlink_to(CTL_FIFO)
+    except Exception:
+        pass
+
+def notify_ztmetro():
+    for ctl in (Path("/run/user/1000/ztmetro.ctl"), Path("/run/ztmetro.ctl")):
+        if ctl.exists():
+            try:
+                with open(ctl, "w") as f:
+                    f.write("modem\n")
+            except Exception:
+                pass
+
+def get_modem_info():
+    try:
+        res = subprocess.run(["mmcli", "-m", "0", "-J"], capture_output=True, text=True, timeout=5)
+        if res.returncode == 0:
+            data = json.loads(res.stdout)
+            return data.get("modem", {})
+    except Exception:
+        pass
+    return None
+
+def write_status(info):
+    sim = "absent"
+    operator = ""
+    tech = ""
+    registered = "none"
+    bars = 0
+    data = 0
+    data_on = 0
+    airplane = 0
+
+    if info:
+        generic = info.get("generic", {})
+        m3gpp = info.get("3gpp", {})
+        state = generic.get("state", "unknown")
+        state_reason = generic.get("state-failed-reason", "")
+
+        if state == "connected":
+            data = 1
+            data_on = 1
+        elif state == "registered":
+            data_on = 1
+
+        power = generic.get("power-state", "")
+        if power == "low":
+            airplane = 1
+
+        if state_reason == "sim-missing" or state in ("failed", "unknown"):
+            sim = "absent"
+            operator = "No SIM"
+        else:
+            sim = "ready"
+            operator = m3gpp.get("operator-name", "")
+            if not operator or operator == "--":
+                operator = "No service"
+            reg_raw = m3gpp.get("registration-state", "")
+            if "home" in reg_raw:
+                registered = "home"
+            elif "roaming" in reg_raw:
+                registered = "roaming"
+            elif "searching" in reg_raw:
+                registered = "searching"
+            
+            techs = generic.get("access-technologies", [])
+            if techs:
+                tech = techs[0].upper()
+            else:
+                tech = "LTE"
+
+            try:
+                q = int(generic.get("signal-quality", {}).get("value", 0))
+                bars = min(5, max(0, int(q / 20)))
+            except Exception:
+                bars = 0
+
+    lines = [
+        f"sim={sim}",
+        f"operator={operator}",
+        f"registered={registered}",
+        f"tech={tech}",
+        f"bars={bars}",
+        f"data={data}",
+        f"data_on={data_on}",
+        f"airplane={airplane}"
+    ]
+    content = "\n".join(lines) + "\n"
+    
+    tmp = RUN_DIR / "status.tmp"
+    try:
+        tmp.write_text(content)
+        tmp.replace(STATUS_FILE)
+        os.chmod(STATUS_FILE, 0o644)
+    except Exception:
+        pass
+    notify_ztmetro()
+
+def ctl_listener():
+    while True:
+        try:
+            if not CTL_FIFO.exists():
+                os.mkfifo(CTL_FIFO, 0o666)
+            fd = os.open(CTL_FIFO, os.O_RDONLY | os.O_NONBLOCK)
+            with os.fdopen(fd, "r") as fifo:
+                while True:
+                    r, _, _ = select.select([fifo], [], [], 2.0)
+                    if r:
+                        line = fifo.readline()
+                        if not line:
+                            break
+                        cmd = line.strip().lower()
+                        if cmd == "data on":
+                            subprocess.run(["nmcli", "radio", "wwan", "on"], check=False)
+                            subprocess.run(["nmcli", "dev", "connect", "qrtr0"], check=False)
+                        elif cmd == "data off":
+                            subprocess.run(["nmcli", "dev", "disconnect", "qrtr0"], check=False)
+                        elif cmd == "airplane on":
+                            subprocess.run(["nmcli", "radio", "all", "off"], check=False)
+                        elif cmd == "airplane off":
+                            subprocess.run(["nmcli", "radio", "all", "on"], check=False)
+        except Exception:
+            time.sleep(1)
+
+def main():
+    t = threading.Thread(target=ctl_listener, daemon=True)
+    t.start()
+    while True:
+        info = get_modem_info()
+        write_status(info)
+        time.sleep(3)
+
+if __name__ == "__main__":
+    main()

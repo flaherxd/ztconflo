@@ -140,7 +140,7 @@ def main():
 
     dest_local_sbin = rootfs / "usr" / "local" / "sbin"
     dest_local_sbin.mkdir(parents=True, exist_ok=True)
-    for b in ("ztoscsf", "ztos-bluetooth-init"):
+    for b in ("ztoscsf", "ztos-bluetooth-init", "ztos-modem-bridge"):
         if (DEVICE / "bin" / b).exists():
             run_unshare(["cp", "-a", str(DEVICE / "bin" / b), str(dest_local_sbin / b)])
             run_unshare(["chmod", "0755", str(dest_local_sbin / b)])
@@ -253,7 +253,7 @@ install -d -m 755 /etc/ztmetro
 printf "scale = 2.5\\nvibrator = auto\\nrotation = 0\\n" > /etc/ztmetro/config
 [ -f /etc/ztos/session.env ] && sed -i "/ZTMETRO_SCALE/d" /etc/ztos/session.env
 systemctl enable greetd NetworkManager sshd systemd-networkd >/dev/null 2>&1 || true
-systemctl enable bluetooth ztos-bluetooth-init >/dev/null 2>&1 || true
+systemctl enable bluetooth ztos-bluetooth-init ztos-modem-bridge >/dev/null 2>&1 || true
 for k in /usr/lib/modules/*/; do depmod -a "$(basename "$k")" >/dev/null 2>&1 || true; done
 systemctl enable ModemManager >/dev/null 2>&1 || true
 systemctl enable zboot-usb-gadget >/dev/null 2>&1 || true
