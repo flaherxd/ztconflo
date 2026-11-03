@@ -235,11 +235,14 @@ mount --bind "$R" "$R"
 mount --rbind /dev "$R/dev"
 mount -t proc proc "$R/proc"
 mount -t tmpfs tmpfs "$R/tmp"
+[ -f /etc/resolv.conf ] && rm -f "$R/etc/resolv.conf" && cp -L /etc/resolv.conf "$R/etc/resolv.conf"
 
 chroot "$R" /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/bin HOME=/root LANG=C.UTF-8 /bin/bash -euc '
 echo ztos-oneplus-fajita > /etc/hostname
+sed -i "s/#DisableSandbox/DisableSandbox/g" /etc/pacman.conf
 pacman-key --init >/dev/null 2>&1 && pacman-key --populate archlinuxarm >/dev/null 2>&1 || true
 pacman -S --noconfirm --needed modemmanager vulkan-freedreno >/dev/null 2>&1 || true
+rm -rf /var/cache/pacman/pkg/*
 id alarm >/dev/null 2>&1 || useradd -m -u 1000 -G wheel,video,input,audio -s /bin/bash alarm
 usermod -aG wheel,video,input,audio alarm >/dev/null 2>&1 || true
 echo "alarm:alarm" | chpasswd
@@ -269,13 +272,13 @@ umount -l "$R" 2>/dev/null || true
 """
     run_unshare(["sh", "-c", chroot_script])
 
-    say("5. Writing ext4 rootfs image (4096M)...")
+    say("5. Writing ext4 rootfs image (7168M)...")
     raw_img = OUT / "rootfs.raw.img"
     if raw_img.exists():
         raw_img.unlink()
     run_unshare([
         "/usr/bin/mke2fs", "-q", "-t", "ext4", "-L", "pmOS_root",
-        "-d", str(rootfs), "-E", "root_owner=0:0", str(raw_img), "4096M"
+        "-d", str(rootfs), "-E", "root_owner=0:0", str(raw_img), "7168M"
     ])
 
     say("6. Converting to sparse fastboot image...")
